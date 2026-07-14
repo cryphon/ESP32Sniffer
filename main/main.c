@@ -22,6 +22,12 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
     printf("---- frame len=%d rssi=%d channel=%d type=%d ----\n",
             rx_ctrl.sig_len, rx_ctrl.rssi, rx_ctrl.channel, type);
 
+    for(int i = 0; i < rx_ctrl.sig_len; ++i)
+    {
+        printf("%02x ", packet->payload[i]);
+        if((i + 1) % 16 == 0) printf("\n");
+    }
+    printf("\n\n");
 }
 
 

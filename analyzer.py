@@ -1,6 +1,12 @@
 import socket
 import struct
-
+import time
+from collections import defaultdict
+from rich.live import Live
+from rich.table import Table
+from rich.console import Console
+from manuf import manuf
+# -------------------------------------------------------------------------------#
 
 # Matches meta_hdr_t: siglen (u16), rssi (i8), channel (u8), type (u8)
 META_FMT = "<H b B B"
@@ -8,6 +14,9 @@ META_LEN = struct.calcsize(META_FMT)
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("0.0.0.0", 5005))
+
+# Manufactoring parser
+parser = manuf.MacParser()
 
 # Mirror frame_control bitfield, but unpacked from raw u16 
 def parse_frame_control(fc_raw: int):
@@ -25,28 +34,101 @@ def parse_frame_control(fc_raw: int):
         "order":    (fc_raw >> 15) & 0x1,
     }
 
+# -------------------------------------------------------------------------------#
+
+console = Console()
+
+SUBTYPE_NAMES = {
+    0x0: "Data", 0x4: "Null", 0x8: "QoS Data", 0xC: "QoS Null",
+}
+TYPE_NAMES = {0: "Mgmt", 1: "Ctrl", 2: "Data"}
+
+stations = defaultdict(lambda: {
+    "count": 0,
+    "last_seen": 0.0,
+    "vendor": "",
+    "rssi": 0,
+    "channel": 0,
+    "subtype": "",
+    "pwr": 0,
+    "bssid": "",
+})
+
+def make_table():
+    table = Table(title="WiFi Sniffer — Station Leaderboard")
+    table.add_column("MAC", style="cyan")
+    table.add_column("BSSID", style="dim")
+    table.add_column("Pkts", justify="right", style="green")
+    table.add_column("RSSI", justify="right")
+    table.add_column("Ch", justify="right")
+    table.add_column("Type", justify="center")
+    table.add_column("Pwr", justify="center")
+    table.add_column("Last seen", justify="right")
+    table.add_column("Vendor", style="magenta", width=20, overflow="ellipsis")
+
+    now = time.time()
+    # Leaderboard: sort by packet count, most active first
+    sorted_stations = sorted(stations.items(), key=lambda kv: -kv[1]["count"])
+
+    for mac, s in sorted_stations[:20]:  # cap display to top 20
+        age = now - s["last_seen"]
+        pwr_str = "[yellow]sleep[/]" if s["pwr"] else "[green]awake[/]"
+        rssi_str = f"{s['rssi']} dBm"
+        if s["rssi"] > -60:
+            rssi_style = "green"
+        elif s["rssi"] > -80:
+            rssi_style = "yellow"
+        else:
+            rssi_style = "red"
+
+        table.add_row(
+            mac,
+            s["bssid"],
+            str(s["count"]),
+            f"[{rssi_style}]{rssi_str}[/{rssi_style}]",
+            str(s["channel"]),
+            s["subtype"],
+            pwr_str,
+            f"{age:.1f}s ago",
+            s["vendor"]
+        )
+    return table
+
+
+
+# -------------------------------------------------------------------------------#
 
 if __name__ == '__main__':
-    print("[INFO]: starting analyzer...")
-    while True:
-        print("[INFO]: Listening...")
-        data, addr = sock.recvfrom(1024)
+    with Live(make_table(), console=console, refresh_per_second=4) as live:
+        while True:
+            data, addr = sock.recvfrom(1024)
 
-        sig_len, rssi, channel, ptype = struct.unpack(META_FMT, data[:META_LEN])
-        frame = data[META_LEN:META_LEN + sig_len]
+            sig_len, rssi, channel, ptype = struct.unpack(META_FMT, data[:META_LEN])
+            frame = data[META_LEN:META_LEN + sig_len]
 
-        if len(frame) < 24:
-            continue # too short for a 30addr header, skip
+            if len(frame) < 24:
+                continue
 
-        fc_raw, duration = struct.unpack("<HH", frame[0:4])
-        fc = parse_frame_control(fc_raw)
-        addr1 = frame[4:10].hex(':')
-        addr2 = frame[10:16].hex(':')
-        addr3 = frame[16:22].hex(':')
-        seq_control = struct.unpack("<H", frame[22:24])[0]
-        print(f"rssi={rssi} ch={channel} type={fc['type']} subtype={fc['subtype']} "
-               f"toDS={fc['to_ds']} fromDS={fc['from_ds']} pwr={fc['pwr_mgmt']} "
-               f"addr1={addr1} addr2={addr2} addr3={addr3}")
+            fc_raw, duration = struct.unpack("<HH", frame[0:4])
+            fc = parse_frame_control(fc_raw)
+            addr1 = frame[4:10].hex(':')
+            addr2 = frame[10:16].hex(':')
+            addr3 = frame[16:22].hex(':')
 
+            info = parser.get_all(addr2)
+            vendor = (info.comment or info.manuf or "?") if info else "?"
 
+            subtype_name = SUBTYPE_NAMES.get(fc['subtype'], f"0x{fc['subtype']:x}")
+            type_name = TYPE_NAMES.get(fc['type'], "?")
 
+            s = stations[addr2]
+            s["count"] += 1
+            s["last_seen"] = time.time()
+            s["vendor"] = vendor
+            s["rssi"] = rssi
+            s["channel"] = channel
+            s["subtype"] = f"{type_name}/{subtype_name}"
+            s["pwr"] = fc['pwr_mgmt']
+            s["bssid"] = addr1 if fc['to_ds'] else addr3
+
+            live.update(make_table())

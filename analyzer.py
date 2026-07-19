@@ -18,8 +18,10 @@ sock.bind(("0.0.0.0", 5005))
 # Manufactoring parser
 parser = manuf.MacParser()
 
-# Mirror frame_control bitfield, but unpacked from raw u16 
+# -------------------------------------------------------------------------------#
+
 def parse_frame_control(fc_raw: int):
+    # Mirror frame_control bitfield, but unpacked from raw u16 
     return {
         "version":  fc_raw & 0x3,
         "type":     (fc_raw >> 2) & 0x3,
@@ -64,7 +66,7 @@ def make_table():
     table.add_column("Type", justify="center")
     table.add_column("Pwr", justify="center")
     table.add_column("Last seen", justify="right")
-    table.add_column("Vendor", style="magenta", width=20, overflow="ellipsis")
+    table.add_column("Vendor", style="magenta", overflow="ellipsis")
 
     now = time.time()
     # Leaderboard: sort by packet count, most active first
@@ -90,11 +92,15 @@ def make_table():
             s["subtype"],
             pwr_str,
             f"{age:.1f}s ago",
-            s["vendor"]
+            s["vendor"],
         )
     return table
 
+# -------------------------------------------------------------------------------#
 
+def is_randomized(mac_str: str) -> bool:
+    first_octet = int(mac_str.split(':')[0], 16)
+    return bool(first_octet & 0x02)
 
 # -------------------------------------------------------------------------------#
 
@@ -115,8 +121,15 @@ if __name__ == '__main__':
             addr2 = frame[10:16].hex(':')
             addr3 = frame[16:22].hex(':')
 
+            randomized = is_randomized(addr2)
             info = parser.get_all(addr2)
-            vendor = (info.comment or info.manuf or "?") if info else "?"
+            val = ""
+            if randomized:
+                vendor = "(randomized)"
+            elif info:
+                vendor = (info.comment or info.manuf or "?")
+            else:
+                vendor = "?"
 
             subtype_name = SUBTYPE_NAMES.get(fc['subtype'], f"0x{fc['subtype']:x}")
             type_name = TYPE_NAMES.get(fc['type'], "?")

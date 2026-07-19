@@ -8,10 +8,17 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 
+/* Own includes */
+#include "sock.c"
+#include "defs.h"
+
+static const char* TAG = "SNIF";
+static EventGroupHandle_t wifi_event_group;
+#define WIFI_CONNECTED_BIT BIT0
 
 typedef struct __attribute((packed))
 {
-    uint16_t protocol_version:      2;
+    uint16_t protocol_version:  2;
     uint16_t type:              2;
     uint16_t subtype:           4;
     uint16_t to_ds:             1;
@@ -61,12 +68,6 @@ enum
 
 
 /* -------------------------------------------------------------- */
-
-static const char* TAG = "SNIF";
-
-/* Fixed channel for now, can hop later */
-#define SNIFF_CHANNEL 1
-
 static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
 {
     wifi_promiscuous_pkt_t* packet = (wifi_promiscuous_pkt_t*)buff;
@@ -77,6 +78,24 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
         return; /* Too short to even hold the base header */
     }
 
+    if (sock < 0) return;
+
+    /* Prepend fixed header with metadata Python needs,
+     * then the raw 802.11 frame bytes. */
+    typedef struct __attribute__((packed))
+    {
+        uint16_t sig_len;
+        int8_t rssi;
+        uint8_t channel;
+        uint8_t type;
+    } meta_hdr_t;
+
+    meta_hdr_t meta = {
+        .sig_len = rx_ctrl.sig_len,
+        .rssi = rx_ctrl.rssi,
+        .channel = rx_ctrl.channel,
+        .type = type,
+    };
 
     const uint8_t* raw = packet->payload;
     const wifi_ieee80211_mac_hdr_t* hdr = (const wifi_ieee80211_mac_hdr_t*)raw;
@@ -86,7 +105,7 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
     /* WDS frame -> address 4 present */
     if(hdr->frame_control.to_ds && hdr->frame_control.from_ds)
     {
-        hdr_len += 6;
+        hdr_len += 6; /* addr 4 */
     }
 
     /* QoS data ->2-byte QoS control field present */
@@ -98,55 +117,90 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
         hdr_len += 2;
     }
     
-
-    printf("---- frame len=%d rssi=%d channel=%d type=%d ----\n",
-           rx_ctrl.sig_len, rx_ctrl.rssi, rx_ctrl.channel, type);
-
-    printf("fc: ver=%d type=%d subtype=%d toDS=%d fromDS=%d\n",
-           hdr->frame_control.protocol_version,
-           hdr->frame_control.type,
-           hdr->frame_control.subtype,
-           hdr->frame_control.to_ds,
-           hdr->frame_control.from_ds);
-
-    printf("addr1=%02x:%02x:%02x:%02x:%02x:%02x\n",
-            hdr->addr1[0], hdr->addr1[1], hdr->addr1[2],
-            hdr->addr1[3], hdr->addr1[4], hdr->addr1[5]);
-    printf("addr2=%02x:%02x:%02x:%02x:%02x:%02x\n",
-            hdr->addr2[0], hdr->addr2[1], hdr->addr2[2],
-            hdr->addr2[3], hdr->addr2[4], hdr->addr2[5]);
-    printf("addr3=%02x:%02x:%02x:%02x:%02x:%02x\n",
-            hdr->addr3[0], hdr->addr3[1], hdr->addr3[2],
-            hdr->addr3[3], hdr->addr3[4], hdr->addr3[5]);
-
-
-    if (rx_ctrl.sig_len > hdr_len) {
-        const uint8_t* body = raw + hdr_len;
-        size_t body_len = rx_ctrl.sig_len - hdr_len;
-        // hex-dump body as before, or hand off to (not-yet-created) NDP parser
+    if(rx_ctrl.sig_len > 512)
+    {
+        printf("[WARNING] guard sendbuf triggered\n");
+        return; /* Guard sendbuf size */
     }
 
+    uint8_t sendbuf[sizeof(meta_hdr_t) + 512];
+    memcpy(sendbuf, &meta, sizeof(meta_hdr_t));
+    memcpy(sendbuf + sizeof(meta_hdr_t), raw, rx_ctrl.sig_len);
 
+    int res = sendto(sock, sendbuf, sizeof(meta_hdr_t) + rx_ctrl.sig_len, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+    if(res < 0)
+    {
+        printf("[WARNING] sendto failed: errno %d\n", errno);
+    }
+}
 
+static void ip_event_handler(void* arg, esp_event_base_t event_base,
+        int32_t event_id, void* event_data)
+{
+    if(event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
+    }
 }
 
 
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) 
+    {
+        wifi_event_sta_disconnected_t* disc = (wifi_event_sta_disconnected_t*) event_data;
+        ESP_LOGW(TAG, "Disconnected, reason: %d", disc->reason);
+        esp_wifi_connect(); // retry
+    }
+}
+
+
+/* -------------------------------------------------------------- */
 void app_main(void)
 {
     printf("[INFO]\tStarting wifi SNIFF\n");
+
 
     /* NVS required by WIFI driver for calibration data storage */
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+
+    wifi_event_group = xEventGroupCreate();
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+                &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                &ip_event_handler, NULL));
+
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+    /* STA mode + connect, get IP and route to the PC */
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+        },
+    };
 
     /* No AP mode needed for radio, prom. just needs radio up */
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_connect());
+
+    /* Block here until an IP has been retrieved */
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT,
+            pdFALSE, pdTRUE, portMAX_DELAY);
+
+    sock_init();
 
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(&sniff_cb));
@@ -154,8 +208,7 @@ void app_main(void)
     wifi_promiscuous_filter_t filter = {
         .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA };
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
-
-    ESP_ERROR_CHECK(esp_wifi_set_channel(SNIFF_CHANNEL, WIFI_SECOND_CHAN_NONE));
-
+    ESP_LOGI(TAG, "Connected on channel 6, sniffing here (no channel override)");
     ESP_LOGI(TAG, "Prom. sniffer running on channel %d", SNIFF_CHANNEL);
 }
+

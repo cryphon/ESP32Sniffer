@@ -1,12 +1,22 @@
 import socket
 import struct
 import time
+import argparse
 from collections import defaultdict
 from rich.live import Live
 from rich.table import Table
 from rich.console import Console
 from manuf import manuf
 # -------------------------------------------------------------------------------#
+
+parser_arg = argparse.ArgumentParser()
+parser_arg.add_argument(
+    "--censor", action="store_true",
+    help="Mask the last 3 octets of MAC/BSSID (keeps OUI visible) for demo/screenshot use"
+)
+args = parser_arg.parse_args()
+
+
 
 # Matches meta_hdr_t: siglen (u16), rssi (i8), channel (u8), type (u8)
 META_FMT = "<H b B B"
@@ -83,9 +93,12 @@ def make_table():
         else:
             rssi_style = "red"
 
+        display_mac = censor_mac(mac) if args.censor else mac
+        display_bssid = censor_mac(s["bssid"]) if args.censor and s["bssid"] else s["bssid"]
+
         table.add_row(
-            mac,
-            s["bssid"],
+            display_mac,
+            display_bssid,
             str(s["count"]),
             f"[{rssi_style}]{rssi_str}[/{rssi_style}]",
             str(s["channel"]),
@@ -101,6 +114,12 @@ def make_table():
 def is_randomized(mac_str: str) -> bool:
     first_octet = int(mac_str.split(':')[0], 16)
     return bool(first_octet & 0x02)
+
+
+def censor_mac(mac_str: str) -> str:
+    # keep first 3 octets (OUI/vendor prefix), mask the rest
+    parts = mac_str.split(':')
+    return ":".join(parts[:3] + ["xx"] * (len(parts) - 3))
 
 # -------------------------------------------------------------------------------#
 

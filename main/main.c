@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_wifi.h"
@@ -9,7 +10,7 @@
 #include "nvs_flash.h"
 
 /* Own includes */
-#include "sock.c"
+#include "net_transport.h"
 #include "defs.h"
 
 static const char* TAG = "SNIF";
@@ -78,8 +79,6 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
         return; /* Too short to even hold the base header */
     }
 
-    if (sock < 0) return;
-
     /* Prepend fixed header with metadata Python needs,
      * then the raw 802.11 frame bytes. */
     typedef struct __attribute__((packed))
@@ -127,11 +126,8 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
     memcpy(sendbuf, &meta, sizeof(meta_hdr_t));
     memcpy(sendbuf + sizeof(meta_hdr_t), raw, rx_ctrl.sig_len);
 
-    int res = sendto(sock, sendbuf, sizeof(meta_hdr_t) + rx_ctrl.sig_len, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-    if(res < 0)
-    {
-        printf("[WARNING] sendto failed: errno %d\n", errno);
-    }
+    net_transport_send(sendbuf, sizeof(meta_hdr_t) + rx_ctrl.sig_len);
+
 }
 
 static void ip_event_handler(void* arg, esp_event_base_t event_base,
@@ -200,7 +196,7 @@ void app_main(void)
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT,
             pdFALSE, pdTRUE, portMAX_DELAY);
 
-    sock_init();
+    net_transport_init();
 
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(&sniff_cb));

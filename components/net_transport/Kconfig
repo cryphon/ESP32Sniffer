@@ -1,0 +1,12 @@
+menu "Socket Target Configuration"
+
+    config TRANSPORT_SOCKET_TARGET_IP
+        string "Target IP"
+        default "target ip"
+
+    config TRANSPORT_SOCKET_TARGET_PORT
+        int "Target port"
+        default 5005
+
+endmenu
+

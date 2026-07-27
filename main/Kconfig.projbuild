@@ -1,0 +1,40 @@
+menu "FightClub"
+
+    choice SCAN_STRATEGY
+        prompt "Channel scan strategy"
+        default SCAN_STRATEGY_FIXED
+        config SCAN_STRATEGY_FIXED
+            bool "Fixed channel"
+        config SCAN_STRATEGY_HOP
+            bool "Channel hopping"
+    endchoice
+
+    config SNIFF_CHANNEL
+        int "Fixed channel number"
+        depends on SCAN_STRATEGY_FIXED
+        range 1 13
+        default 6
+
+    config HOP_DWELL_MS
+        int "Hopp dwell time (ms)"
+        depends on SCAN_STRATEGY_HOP
+        default 300
+
+    choice TRANSPORT_STRATEGY
+        prompt "Uplink transport"
+        default TRANSPORT_SOCKET
+        config TRANSPORT_SOCKET
+            bool "WiFi socket"
+    endchoice
+
+    config UPLINK_FLUSH_TICKS
+        int "Ticks between uplink flushes"
+        depends on TRANSPORT_SOCKET
+        default 20
+
+    rsource "../components/wifi_conn/Kconfig"
+    rsource "../components/net_transport/Kconfig"
+
+endmenu
+
+

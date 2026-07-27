@@ -2,3 +2,4 @@ build/*
 main/defs.h
 sdkconfig
 sdkconfig.old
+.cache/

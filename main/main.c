@@ -40,8 +40,10 @@ static void uplink_task(void* arg)
 static void uplink_flush(const transport_strategy_t* transport)
 {
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     if (wifi_conn_reconnect(5000) != ESP_OK) {
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
         esp_wifi_set_promiscuous(true);
         return;
     }
@@ -50,11 +52,26 @@ static void uplink_flush(const transport_strategy_t* transport)
     transport->init();
 
     captured_frame_t frame;
-    while (xQueueReceive(s_frame_queue, &frame, 0) == pdTRUE) {
-        transport->send(frame.data, frame.len);
-    }
+    int consecutive_failures = 0;
+    const int MAX_CONSECUTIVE_FAILURES = 5;
 
+    while (xQueueReceive(s_frame_queue, &frame, 0) == pdTRUE) {
+        if (transport->send(frame.data, frame.len) == ESP_OK) {
+            consecutive_failures = 0;
+            continue;
+        }
+
+        consecutive_failures++;
+        xQueueSendToFront(s_frame_queue, &frame, 0);  // retry this same frame next time
+
+        if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+            break;  // link genuinely unstable, not just an ARP hiccup — bail for this cycle
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(20));  // brief backoff between retries of the same frame
+    }
     transport->deinit();
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     wifi_conn_disconnect();
     esp_wifi_set_promiscuous(true);
 }
@@ -98,11 +115,12 @@ void app_main(void)
     if (tick_count >= CONFIG_UPLINK_FLUSH_TICKS) {
     tick_count = 0;
     ESP_LOGI(TAG, "flush requested; parking on home channel");
-    strategy->pause();
 
+
+    strategy->pause();
+    vTaskDelay(pdMS_TO_TICKS(100));  // let the last hop channel-switch settle before auth
     uplink_flush(transport);   // owns connect/send/disconnect internally now
     vTaskDelay(pdMS_TO_TICKS(200));
-
     strategy->resume();
 }
 #endif

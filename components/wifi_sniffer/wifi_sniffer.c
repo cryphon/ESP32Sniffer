@@ -52,7 +52,7 @@ static void sniff_cb(void* buff, wifi_promiscuous_pkt_type_t type)
 
     if (rx_ctrl.sig_len > SNIFF_MAX_FRAME_LEN)
     {
-        printf("[WARNING] guard sendbuf triggered\n");
+        ESP_LOGW(TAG, "guard sendbuf triggered\n");
         return; /* Guard sendbuf size */
     }
 

@@ -53,7 +53,7 @@ python analyzer.py --censor   # masks the last 3 octets of MAC/BSSID addresses
 The dashboard updates live as frames arrive:
 <img width="1281" height="720" alt="image" src="https://github.com/user-attachments/assets/9cda84d8-ef52-434f-8ded-83d4fe6fec71" />
 
-
+> Press v while the sniffer is running to toggle between the Leaderboard view (top 20 stations by packet count, best for fixed-channel mode) and the Full List view (every station discovered so far, sorted by first-seen — better suited for hop mode, where lower packet counts make the leaderboard less meaningful).
 ## Notes
  
 - Channel-hop mode involves periodic reconnect windows and is inherently less real-time than fixed-channel mode — tune **Hop dwell time** and **Ticks between uplink flushes** to trade off channel coverage against uplink freshness.

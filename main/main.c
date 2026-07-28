@@ -7,6 +7,7 @@
 
 /* Own includes */
 #include "wifi_conn.h"
+#include "conn_events.h"
 #include "wifi_sniffer.h"
 #include "scan_strategy.h"
 #include "transport_factory.h"
@@ -18,7 +19,7 @@
 /* -------------------------------------------------------------- */
 static void frame_capture_handler(const uint8_t* buf, size_t len)
 {
-    captured_frame_t frame;
+    static captured_frame_t frame; /* (.bss instead) */
     frame.len = (len > FRAME_MAX_LEN) ? FRAME_MAX_LEN : len;
     memcpy(frame.data, buf, frame.len);
     xQueueSend(s_frame_queue, & frame, 0);
@@ -39,13 +40,14 @@ static void uplink_task(void* arg)
 #if CONFIG_SCAN_STRATEGY_HOP
 static void uplink_flush(const transport_strategy_t* transport)
 {
-    esp_wifi_set_promiscuous(false);   /* release radio for reconnect */
+    esp_wifi_set_promiscuous(false);
 
     if (wifi_conn_reconnect(5000) != ESP_OK) {
-        esp_wifi_set_promiscuous(true);   /* resume sniffing even on failure */
+        esp_wifi_set_promiscuous(true);
         return;
     }
 
+    vTaskDelay(pdMS_TO_TICKS(150));  // let ARP resolve before bulk-sending
     transport->init();
 
     captured_frame_t frame;
@@ -55,10 +57,9 @@ static void uplink_flush(const transport_strategy_t* transport)
 
     transport->deinit();
     wifi_conn_disconnect();
-    esp_wifi_set_promiscuous(true);   /* resume sniffing before next hop cycle */
+    esp_wifi_set_promiscuous(true);
 }
 #endif
-
 
 
 
@@ -74,9 +75,9 @@ void app_main(void)
 #endif
 
     const transport_strategy_t* transport = transport_get_active();
-    transport->init();
     
 #if CONFIG_SCAN_STRATEGY_FIXED
+    transport->init();
     scan_strategy_t* strategy = strategy_fixed_channel_get(CONFIG_SNIFF_CHANNEL);
     xTaskCreate(uplink_task, "uplink_task", 4096, (void*)transport, 5, NULL);
 #else
@@ -95,12 +96,16 @@ void app_main(void)
     tick_count++;
 
 #if CONFIG_SCAN_STRATEGY_HOP
-    if(tick_count >= CONFIG_UPLINK_FLUSH_TICKS)
-    {
-        ESP_LOGI(TAG, "flush triggered");
-        tick_count = 0;
-        uplink_flush(transport);
-    }
+    if (tick_count >= CONFIG_UPLINK_FLUSH_TICKS) {
+    tick_count = 0;
+    ESP_LOGI(TAG, "flush requested; parking on home channel");
+    strategy->pause();
+
+    uplink_flush(transport);   // owns connect/send/disconnect internally now
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    strategy->resume();
+}
 #endif
 
     uint32_t interval = strategy->tick_interval_ms ? strategy->tick_interval_ms : 1000;

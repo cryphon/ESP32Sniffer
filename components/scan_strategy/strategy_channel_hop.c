@@ -8,24 +8,42 @@
 static uint8_t  s_channels[MAX_HOP_CHANNELS];
 static size_t   s_channel_count;
 static size_t   s_idx;
+static bool     s_paused;
 
 
 static esp_err_t channel_hop_init(void)
 {
     s_idx = 0;
+    s_paused = false;
     return esp_wifi_set_channel(s_channels[s_idx], WIFI_SECOND_CHAN_NONE);
 }
 
 static void channel_hop_tick(void)
 {
+    if (s_paused)
+    {
+        return;
+    }
     s_idx = (s_idx + 1) % s_channel_count;
     esp_wifi_set_channel(s_channels[s_idx], WIFI_SECOND_CHAN_NONE);
+}
+
+static void channel_hop_pause(void)
+{
+    s_paused = true;
+}
+
+static void channel_hop_resume(void)
+{
+    s_paused = false;
 }
 
 static scan_strategy_t s_strategy = {
     .name             = "channel_hop",
     .init             = channel_hop_init,
     .on_tick          = channel_hop_tick,
+    .pause            = channel_hop_pause,
+    .resume           = channel_hop_resume,
     .tick_interval_ms = 0,
 };
 

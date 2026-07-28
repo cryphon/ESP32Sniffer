@@ -7,6 +7,8 @@ typedef struct
     const char* name;
     esp_err_t (*init)(void);    /* Called once before wifi_sniffer_start() */
     void (*on_tick)(void);      /* Called periodically from main's loop; may be NULL */
+    void (*pause)(void);        /* Stop advancing channel, stay put */
+    void(*resume)(void);        /* Resume hop cycle */
     uint32_t tick_interval_ms;  /* Ignored if on_tick is NULL */
 } scan_strategy_t;
 

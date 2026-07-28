@@ -46,20 +46,18 @@ static esp_err_t socket_init(void)
 }
 static esp_err_t socket_send(const uint8_t* buf, size_t len)
 {
-    if(s_sock < 0)
-    {
-        /* lazily recoonect; covers dc/rc cycle from flush */
-        if(socket_connect() != ESP_OK)
-        {
+    if (s_sock < 0) {
+        if (socket_connect() != ESP_OK) {
             return ESP_FAIL;
         }
     }
-
-
     int res = send(s_sock, buf, len, 0);
-    if(res < 0)
-    {
-        ESP_LOGW(TAG, "send() failed: errno %d, will recconect next call", errno);
+    if (res < 0) {
+        if (errno == ENOMEM) {
+            ESP_LOGW(TAG, "send() transient ENOMEM, dropping frame, socket kept alive");
+            return ESP_FAIL;   // drop this frame, but don't close the socket
+        }
+        ESP_LOGW(TAG, "send() failed: errno %d, will reconnect next call", errno);
         close(s_sock);
         s_sock = -1;
         return ESP_FAIL;

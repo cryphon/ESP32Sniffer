@@ -11,10 +11,14 @@ static esp_err_t fixed_channel_init(void)
     return esp_wifi_set_channel(s_channel, WIFI_SECOND_CHAN_NONE);
 }
 
+static void fixed_channel_noop(void) { /* nothing to pause/resume on a fixed channel */ }
+
 static scan_strategy_t s_strategy = {
     .name             = "fixed_channel",
     .init             = fixed_channel_init,
     .on_tick          = NULL,
+    .pause            = fixed_channel_noop,
+    .resume           = fixed_channel_noop,
     .tick_interval_ms = 0,
 };
 
@@ -23,3 +27,4 @@ scan_strategy_t* strategy_fixed_channel_get(uint8_t channel)
     s_channel = channel;
     return &s_strategy;
 }
+

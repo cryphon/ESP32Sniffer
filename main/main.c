@@ -7,7 +7,6 @@
 
 /* Own includes */
 #include "wifi_conn.h"
-#include "conn_events.h"
 #include "wifi_sniffer.h"
 #include "scan_strategy.h"
 #include "transport_factory.h"

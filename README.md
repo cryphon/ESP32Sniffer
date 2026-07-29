@@ -1,6 +1,6 @@
 # FightClub
 
-An ESP322based 802.11 promiscuous-mode snuffer with configurable channel scanning (fixed-channel or channel-hopping) and pluggable uplink (WiFi socke , with USB as extensible option), paired with Python terminal dashboard for live station monitoring.
+An ESP32 based 802.11 promiscuous-mode snuffer with configurable channel scanning (fixed-channel or channel-hopping) and pluggable uplink (WiFi socke , with USB as extensible option), paired with Python terminal dashboard for live station monitoring.
 
 ## Configuration
 All runtime configuration lives in `menuconfig`, under **FightClub** top-level menu.
